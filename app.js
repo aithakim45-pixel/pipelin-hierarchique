@@ -2,40 +2,57 @@
 // Powered by open public Hypixel data & community endpoints
 
 const STATE = {
-    activeTab: 'bazaar', // 'bazaar', 'npc', 'craft', 'simulator'
+    activeTab: 'bazaar', // 'bazaar', 'npc', 'craft', 'forge', 'simulator'
     category: 'ALL',     // 'ALL', 'MINING', 'FARMING', 'COMBAT', 'WOODS_FISH', 'ODDITIES'
+    forgeCategory: 'ALL',// 'ALL', 'Refined Materials', 'Drill Upgrades', 'Armor of Divan', 'Mining Drills', 'Keys & Utilities', 'Perfect Gemstones'
     rawData: null,
+    lowestBinData: {},   // Auction House Lowest BIN prices from Moulberry
     items: [],
     npcFlips: [],
     craftFlips: [],
+    forgeFlips: [],
     loading: false,
+    lowestBinLoading: false,
     lastUpdated: null,
     taxRate: 0.01125,    // Default Skyblock Bazaar tax: 1.125%
+    ahFeeRate: 0.02,     // Default Auction House fee: 2%
+    quickForgeLevel: 20, // Quick Forge Perk level (0 to 20; 20 = 30% reduction)
+    quickForgeReduction: 0.30,
+    forgeCostMode: 'order', // 'order' (Buy Order) or 'instant' (Instant Buy)
     budget: Infinity,
     minProfit: 500,
     minRoi: 1.0,
     minVolume: 20000,
     safeFlipsOnly: true, // Filter out manipulation traps & dead items
     searchQuery: '',
-    sortBy: 'score',     // 'score', 'realisticHourly', 'profit', 'roi', 'volume', 'cost', 'speed'
+    sortBy: 'score',     // 'score', 'realisticHourly', 'profit', 'roi', 'volume', 'cost', 'speed', 'forgeHourly'
     sortOrder: 'desc',
     autoRefreshInterval: null,
     refreshSecondsLeft: 30,
     selectedItemForSim: null
 };
 
-// Public CORS Proxies & Local Bridge to access Hypixel Bazaar API without API key requirements
+// Public CORS Proxies & Local Bridge
 const PROXIES = [
     (url) => window.location.protocol.startsWith('http') ? `${window.location.origin}/api/bazaar` : url,
-    (url) => url, // Direct (works when hosted locally or browser CORS disabled)
+    (url) => url,
+    (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+    (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`
+];
+
+const LOWEST_BIN_PROXIES = [
+    (url) => window.location.protocol.startsWith('http') ? `${window.location.origin}/api/lowestbin` : url,
+    (url) => url,
     (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
     (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
     (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`
 ];
 
 const HYPIXEL_BAZAAR_URL = 'https://api.hypixel.net/v2/skyblock/bazaar';
+const MOULBERRY_LOWESTBIN_URL = 'https://moulberry.codes/lowestbin.json';
 
-// Format coin numbers neatly (e.g. 1.25M, 450.2k, 12,340)
+// Format coins neatly
 function formatCoins(amount) {
     if (amount === undefined || amount === null || isNaN(amount)) return '0';
     const abs = Math.abs(amount);
@@ -50,6 +67,15 @@ function formatNumber(num) {
     if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
     if (num >= 1000) return (num / 1000).toFixed(1) + 'k';
     return num.toLocaleString();
+}
+
+function formatDuration(minutes) {
+    if (minutes < 1) return `${Math.round(minutes * 60)}s`;
+    const hrs = Math.floor(minutes / 60);
+    const mins = Math.round(minutes % 60);
+    if (hrs === 0) return `${mins}m`;
+    if (mins === 0) return `${hrs}h`;
+    return `${hrs}h ${mins}m`;
 }
 
 function cleanItemName(id) {
@@ -88,13 +114,12 @@ function getItemCategory(id) {
     return 'ODDITIES';
 }
 
-// Fetch Bazaar Data with multi-fallback redundancy
+// Fetch Bazaar Data
 async function fetchBazaarData() {
     STATE.loading = true;
-    updateStatusUI('Fetching live SkyBlock Bazaar data...');
+    updateStatusUI('Fetching live SkyBlock Bazaar & AH data...');
 
     let data = null;
-    let successfulProxy = -1;
 
     for (let i = 0; i < PROXIES.length; i++) {
         const proxyUrl = PROXIES[i](HYPIXEL_BAZAAR_URL);
@@ -112,30 +137,120 @@ async function fetchBazaarData() {
                 const json = await response.json();
                 if (json && json.success && json.products) {
                     data = json;
-                    successfulProxy = i;
                     break;
                 }
             }
         } catch (err) {
-            console.warn(`Fetch via route ${i} failed, trying next...`, err.message);
+            console.warn(`Bazaar fetch route ${i} failed, trying next...`, err.message);
         }
     }
 
     if (!data) {
-        console.warn('Live API unreachable via proxies; loading cached market snapshot.');
+        console.warn('Live Bazaar API unreachable; loading cached snapshot.');
         data = generateDemoMarketData();
-        updateStatusUI('Showing cached snapshot (Run start-server.ps1 for live direct stream)', true);
+        updateStatusUI('Using cached snapshot (Run start-server.ps1 for live stream)', true);
     } else {
-        updateStatusUI(`Connected directly! Updated: ${new Date(data.lastUpdated).toLocaleTimeString()}`);
+        updateStatusUI(`Connected to Hypixel! Updated: ${new Date(data.lastUpdated).toLocaleTimeString()}`);
     }
 
     STATE.rawData = data;
     STATE.lastUpdated = data.lastUpdated || Date.now();
     STATE.loading = false;
+
+    // Fetch AH lowest BIN data alongside Bazaar
+    await fetchLowestBinData();
     processMarketData();
 }
 
-// Transform raw Hypixel Bazaar JSON into deeply calculated, realistic flips
+// Fetch Auction House Lowest BIN Data
+async function fetchLowestBinData() {
+    STATE.lowestBinLoading = true;
+    let binData = null;
+
+    for (let i = 0; i < LOWEST_BIN_PROXIES.length; i++) {
+        const proxyUrl = LOWEST_BIN_PROXIES[i](MOULBERRY_LOWESTBIN_URL);
+        try {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 7000);
+            
+            const response = await fetch(proxyUrl, {
+                signal: controller.signal,
+                headers: { 'Accept': 'application/json' }
+            });
+            clearTimeout(timeout);
+
+            if (response.ok) {
+                const json = await response.json();
+                if (json && typeof json === 'object') {
+                    binData = json;
+                    break;
+                }
+            }
+        } catch (err) {
+            console.warn(`Lowest BIN fetch route ${i} failed...`, err.message);
+        }
+    }
+
+    if (!binData) {
+        console.warn('AH lowest BIN unreachable; loading baseline AH values.');
+        binData = generateDemoLowestBinData();
+    }
+
+    STATE.lowestBinData = binData;
+    STATE.lowestBinLoading = false;
+}
+
+// Helper: Get item cost (from Bazaar or AH lowest BIN)
+function getItemBuyCost(itemId, useOrder = true) {
+    if (STATE.rawData && STATE.rawData.products && STATE.rawData.products[itemId]) {
+        const qs = STATE.rawData.products[itemId].quick_status;
+        if (qs) {
+            const price = useOrder ? (qs.sellPrice || qs.buyPrice) : qs.buyPrice;
+            if (price > 0) return { price, source: useOrder ? 'Bazaar Order' : 'Bazaar Insta' };
+        }
+    }
+    // Check Auction House lowest BIN
+    if (STATE.lowestBinData && STATE.lowestBinData[itemId]) {
+        return { price: STATE.lowestBinData[itemId], source: 'AH Lowest BIN' };
+    }
+    return { price: 0, source: 'Unknown' };
+}
+
+// Helper: Get item sell value (highest of Bazaar sell offer or AH lowest BIN)
+function getItemSellValue(itemId) {
+    let bestNet = 0;
+    let bestGross = 0;
+    let bestSource = 'Unknown';
+
+    // 1. Check Bazaar Sell Offer
+    if (STATE.rawData && STATE.rawData.products && STATE.rawData.products[itemId]) {
+        const qs = STATE.rawData.products[itemId].quick_status;
+        if (qs && qs.buyPrice > 0) {
+            const gross = qs.buyPrice;
+            const net = gross * (1 - STATE.taxRate);
+            if (net > bestNet) {
+                bestNet = net;
+                bestGross = gross;
+                bestSource = 'Bazaar Offer';
+            }
+        }
+    }
+
+    // 2. Check Auction House Lowest BIN
+    if (STATE.lowestBinData && STATE.lowestBinData[itemId]) {
+        const gross = STATE.lowestBinData[itemId];
+        const net = gross * (1 - STATE.ahFeeRate);
+        if (net > bestNet) {
+            bestNet = net;
+            bestGross = gross;
+            bestSource = 'AH Lowest BIN';
+        }
+    }
+
+    return { grossPrice: bestGross, netPrice: bestNet, source: bestSource };
+}
+
+// Transform raw Bazaar & AH data into flips and Forge calculations
 function processMarketData() {
     if (!STATE.rawData || !STATE.rawData.products) return;
 
@@ -147,24 +262,21 @@ function processMarketData() {
         const qs = product.quick_status;
         if (!qs) continue;
 
-        const buyOrderPrice = qs.sellPrice || 0; // Highest active buy order
-        const sellOfferPrice = qs.buyPrice || 0; // Lowest active sell offer
+        const buyOrderPrice = qs.sellPrice || 0;
+        const sellOfferPrice = qs.buyPrice || 0;
         const buyMovingWeek = qs.buyMovingWeek || 0;
         const sellMovingWeek = qs.sellMovingWeek || 0;
         const totalVolume = buyMovingWeek + sellMovingWeek;
         const dailyVolume = Math.round(totalVolume / 7);
 
-        // Hourly throughput: players instaselling fulfills buy orders; players instabuying buys sell offers
-        const hourlyBuyFills = Math.round(sellMovingWeek / 168); // how many units sold to buy orders per hour
-        const hourlySellFills = Math.round(buyMovingWeek / 168); // how many units bought from sell offers per hour
-        const hourlyCycleVolume = Math.min(hourlyBuyFills, hourlySellFills); // Bottleneck of the round-trip
+        const hourlyBuyFills = Math.round(sellMovingWeek / 168);
+        const hourlySellFills = Math.round(buyMovingWeek / 168);
+        const hourlyCycleVolume = Math.min(hourlyBuyFills, hourlySellFills);
 
         const activeBuyOrders = qs.buyOrders || 0;
         const activeSellOrders = qs.sellOrders || 0;
         const totalCompetition = activeBuyOrders + activeSellOrders;
 
-        // Check for Market Manipulation / False Spread Traps
-        // E.g. Someone placed a fake order of 1 item with absurd spread
         let isManipulated = false;
         let manipulationReason = '';
 
@@ -191,18 +303,12 @@ function processMarketData() {
             const profitPerUnit = netSellPrice - buyOrderPrice;
             const roi = (profitPerUnit / buyOrderPrice) * 100;
 
-            // REALISTIC MONEY MODEL:
-            // A realistic flipper does not capture 100% of the market.
-            // Competition factor: more active orders = more undercutting = smaller share of volume
-            // Typical active flipper captures 4% to 12% of the hourly throughput
             const competitionPenalty = 1 / (1 + (totalCompetition * 0.035));
             const marketShare = Math.min(0.12, Math.max(0.02, 0.08 * competitionPenalty));
 
-            // Realistic units you can successfully buy and sell in 1 hour without getting permanently undercut
             const realisticUnitsPerHour = Math.round(hourlyCycleVolume * marketShare);
             const realisticHourlyProfit = Math.round(realisticUnitsPerHour * profitPerUnit);
 
-            // Estimated fill time for a standard order of 160 units (or 64 for expensive items)
             const standardBatch = buyOrderPrice > 100000 ? 16 : (buyOrderPrice > 5000 ? 64 : 160);
             let fillTimeMinutes = Infinity;
             let fillTimeBadge = '🔴 > 1 hour';
@@ -222,37 +328,30 @@ function processMarketData() {
                 }
             }
 
-            // Realistic Flipping Intelligence Score (0 - 100)
-            // Balances Volume/Velocity (40%), Net Profit (25%), ROI % (20%), and Low Competition (15%)
             let score = 0;
-            // Volume component (up to 40 pts)
             if (totalVolume >= 5000000) score += 40;
             else if (totalVolume >= 1000000) score += 32;
             else if (totalVolume >= 200000) score += 24;
             else if (totalVolume >= 50000) score += 15;
             else score += 5;
 
-            // Hourly Profit component (up to 25 pts)
             if (realisticHourlyProfit >= 5000000) score += 25;
             else if (realisticHourlyProfit >= 2000000) score += 20;
             else if (realisticHourlyProfit >= 500000) score += 15;
             else if (realisticHourlyProfit >= 100000) score += 10;
             else score += 4;
 
-            // ROI component (up to 20 pts)
             if (roi >= 20) score += 20;
             else if (roi >= 10) score += 16;
             else if (roi >= 5) score += 12;
             else if (roi >= 2) score += 7;
             else score += 2;
 
-            // Competition component (up to 15 pts)
             if (totalCompetition <= 20) score += 15;
             else if (totalCompetition <= 50) score += 10;
             else if (totalCompetition <= 100) score += 6;
             else score += 2;
 
-            // Deduct score if suspected manipulation
             if (isManipulated) score = Math.max(0, score - 50);
 
             let liquidity = 'High';
@@ -293,7 +392,7 @@ function processMarketData() {
             });
         }
 
-        // 2. NPC Vendor Flips Calculation (Instant-Buy on Bazaar -> Sell to NPC)
+        // 2. NPC Vendor Flips
         const npcPrice = NPC_PRICES[id];
         if (npcPrice && sellOfferPrice > 0) {
             const npcProfit = npcPrice - sellOfferPrice;
@@ -358,9 +457,77 @@ function processMarketData() {
         }
     }
 
+    // 4. FORGE RECIPES CALCULATION (Auction House + Bazaar Integration)
+    const forgeFlips = [];
+    if (typeof FORGE_RECIPES !== 'undefined') {
+        const useOrder = STATE.forgeCostMode === 'order';
+
+        for (const recipe of FORGE_RECIPES) {
+            let totalCost = 0;
+            const inputBreakdown = [];
+            let canCalculate = true;
+
+            for (const input of recipe.inputs) {
+                const itemCostInfo = getItemBuyCost(input.id, useOrder);
+                if (itemCostInfo.price <= 0) {
+                    canCalculate = false;
+                    break;
+                }
+                const itemTotalCost = itemCostInfo.price * input.count;
+                totalCost += itemTotalCost;
+                inputBreakdown.push({
+                    id: input.id,
+                    name: cleanItemName(input.id),
+                    count: input.count,
+                    unitPrice: itemCostInfo.price,
+                    totalCost: itemTotalCost,
+                    source: itemCostInfo.source
+                });
+            }
+
+            if (!canCalculate || totalCost <= 0) continue;
+
+            const sellInfo = getItemSellValue(recipe.id);
+            if (sellInfo.netPrice <= 0) continue;
+
+            const netProfit = sellInfo.netPrice - totalCost;
+            const roi = (netProfit / totalCost) * 100;
+
+            // Adjusted forge time factoring in Quick Forge perk level
+            const adjustedDurationMinutes = recipe.durationMinutes * (1 - STATE.quickForgeReduction);
+            const adjustedDurationHours = Math.max(0.008, adjustedDurationMinutes / 60);
+
+            // Profit metrics
+            const profitPerHour = netProfit / adjustedDurationHours;
+            const profitPerDaySlot = profitPerHour * 24;
+            const fiveSlotsDailyPotential = profitPerDaySlot * 5;
+
+            forgeFlips.push({
+                id: recipe.id,
+                name: recipe.name,
+                category: recipe.category,
+                hotm: recipe.hotm,
+                baseDurationMinutes: recipe.durationMinutes,
+                adjustedDurationMinutes,
+                adjustedDurationHours,
+                totalCost,
+                grossSellPrice: sellInfo.grossPrice,
+                netSellPrice: sellInfo.netPrice,
+                sellSource: sellInfo.source,
+                netProfit,
+                roi,
+                profitPerHour,
+                profitPerDaySlot,
+                fiveSlotsDailyPotential,
+                inputs: inputBreakdown
+            });
+        }
+    }
+
     STATE.items = bazaarFlips;
     STATE.npcFlips = npcFlips;
     STATE.craftFlips = craftFlips;
+    STATE.forgeFlips = forgeFlips;
 
     render();
 }
@@ -371,6 +538,8 @@ function render() {
 
     if (STATE.activeTab === 'bazaar') {
         renderBazaarTable();
+    } else if (STATE.activeTab === 'forge') {
+        renderForgeTable();
     } else if (STATE.activeTab === 'npc') {
         renderNpcTable();
     } else if (STATE.activeTab === 'craft') {
@@ -382,11 +551,9 @@ function render() {
 
 function renderStatsSummary() {
     const totalFlips = STATE.items.length;
-    // Top realistic money maker
     const topHourly = [...STATE.items].sort((a,b) => b.realisticHourlyProfit - a.realisticHourlyProfit)[0];
-    const topFlip = [...STATE.items].sort((a,b) => b.profit - a.profit)[0];
     const topRoi = [...STATE.items].filter(i => i.weeklyVolume > 100000 && !i.isManipulated).sort((a,b) => b.roi - a.roi)[0];
-    const npcCount = STATE.npcFlips.length;
+    const topForge = [...STATE.forgeFlips].sort((a,b) => b.profitPerHour - a.profitPerHour)[0];
 
     document.getElementById('stat-total-flips').innerText = totalFlips.toLocaleString();
     
@@ -396,20 +563,23 @@ function renderStatsSummary() {
         document.getElementById('stat-top-hourly-item').innerText = topHourly ? `${topHourly.name} (realistic)` : '-';
     }
 
-    document.getElementById('stat-top-profit').innerText = topFlip ? `${formatCoins(topFlip.profit)} coins` : '-';
-    document.getElementById('stat-top-item').innerText = topFlip ? topFlip.name : '-';
+    const topForgeEl = document.getElementById('stat-top-forge');
+    if (topForgeEl) {
+        topForgeEl.innerText = topForge ? `+${formatCoins(topForge.profitPerHour)}/hr` : '-';
+        document.getElementById('stat-top-forge-item').innerText = topForge ? `${topForge.name} (HOTM ${topForge.hotm})` : '-';
+    }
+
     document.getElementById('stat-top-roi').innerText = topRoi ? `${topRoi.roi.toFixed(1)}% (${topRoi.name})` : '-';
-    document.getElementById('stat-npc-flips').innerText = `${npcCount} Free Coins Flips`;
 }
 
-// Render Main Bazaar Spread Table
-function renderBazaarTable() {
+// Render The Forge Tab (AH + Bazaar Fusion)
+function renderForgeTable() {
     const container = document.getElementById('table-content');
-    let list = [...STATE.items];
+    let list = [...STATE.forgeFlips];
 
-    // Filter by category
-    if (STATE.category !== 'ALL') {
-        list = list.filter(item => item.category === STATE.category);
+    // Filter by Forge category
+    if (STATE.forgeCategory !== 'ALL') {
+        list = list.filter(item => item.category === STATE.forgeCategory);
     }
 
     // Filter by search query
@@ -418,32 +588,268 @@ function renderBazaarTable() {
         list = list.filter(item => item.name.toLowerCase().includes(q) || item.id.toLowerCase().includes(q));
     }
 
-    // Safe Flips Only (Filter out manipulation traps and dead items)
+    // Filter by budget
+    if (isFinite(STATE.budget) && STATE.budget > 0) {
+        list = list.filter(item => item.totalCost <= STATE.budget);
+    }
+
+    // Sort
+    list.sort((a, b) => {
+        let diff = 0;
+        if (STATE.sortBy === 'forgeHourly' || STATE.sortBy === 'score' || STATE.sortBy === 'realisticHourly') diff = a.profitPerHour - b.profitPerHour;
+        else if (STATE.sortBy === 'profit') diff = a.netProfit - b.netProfit;
+        else if (STATE.sortBy === 'roi') diff = a.roi - b.roi;
+        else if (STATE.sortBy === 'cost') diff = a.totalCost - b.totalCost;
+        else if (STATE.sortBy === 'speed') diff = a.adjustedDurationMinutes - b.adjustedDurationMinutes;
+        return STATE.sortOrder === 'desc' ? -diff : diff;
+    });
+
+    document.getElementById('match-count').innerText = `${list.length} forge recipes active`;
+
+    if (list.length === 0) {
+        container.innerHTML = `
+            <div class="py-16 text-center text-zinc-400">
+                <i data-lucide="hammer" class="w-12 h-12 mx-auto mb-3 text-zinc-600"></i>
+                <p class="text-lg font-medium text-zinc-300">No forge recipes match your filter</p>
+                <p class="text-sm">Try expanding your budget or clearing the search query.</p>
+            </div>
+        `;
+        lucide.createIcons();
+        return;
+    }
+
+    let rowsHtml = '';
+    list.forEach((item, index) => {
+        const ingredientsTooltip = item.inputs.map(i => `${i.count}x ${i.name} (${formatCoins(i.totalCost)} via ${i.source})`).join('\n');
+        const ingredientsBadges = item.inputs.slice(0, 3).map(i => `<span class="px-1.5 py-0.5 rounded bg-zinc-800 text-[10px] text-zinc-300">${i.count}x ${i.name}</span>`).join(' ');
+        const extraBadges = item.inputs.length > 3 ? `<span class="text-[10px] text-zinc-500 font-mono">+${item.inputs.length - 3} more</span>` : '';
+
+        const sellSourceBadge = item.sellSource.includes('AH') 
+            ? '<span class="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 font-medium">AH LBIN</span>'
+            : '<span class="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 font-medium">Bazaar</span>';
+
+        rowsHtml += `
+            <tr class="border-b border-zinc-800/60 hover:bg-zinc-800/40 transition-colors">
+                <td class="py-3 px-4">
+                    <div class="flex items-center gap-1.5 font-mono text-xs">
+                        <span class="text-zinc-500">#${index + 1}</span>
+                        <span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                            HOTM ${item.hotm}
+                        </span>
+                    </div>
+                </td>
+                <td class="py-3 px-4">
+                    <div class="flex flex-col">
+                        <div class="flex items-center gap-2">
+                            <span class="font-bold text-zinc-100 hover:text-amber-400 cursor-pointer" onclick="showForgeBreakdown('${item.id}')">${item.name}</span>
+                            ${sellSourceBadge}
+                        </div>
+                        <div class="text-[11px] text-zinc-400 flex flex-wrap items-center gap-1 mt-1" title="${ingredientsTooltip}">
+                            ${ingredientsBadges} ${extraBadges}
+                        </div>
+                    </div>
+                </td>
+                <td class="py-3 px-4 font-mono text-sm text-zinc-300">${formatCoins(item.totalCost)}</td>
+                <td class="py-3 px-4 font-mono text-sm text-zinc-300">${formatCoins(item.grossSellPrice)}</td>
+                <td class="py-3 px-4 font-mono text-sm font-bold ${item.netProfit > 0 ? 'text-emerald-400' : 'text-red-400'}">
+                    +${formatCoins(item.netProfit)}
+                </td>
+                <td class="py-3 px-4">
+                    <div class="flex flex-col">
+                        <span class="font-mono text-sm font-extrabold text-amber-300">+${formatCoins(item.profitPerHour)}/hr</span>
+                        <span class="text-[10px] text-zinc-500 font-mono">5 Slots: +${formatCoins(item.fiveSlotsDailyPotential)}/day</span>
+                    </div>
+                </td>
+                <td class="py-3 px-4">
+                    <div class="flex flex-col">
+                        <span class="font-mono text-xs text-zinc-200">${formatDuration(item.adjustedDurationMinutes)}</span>
+                        <span class="text-[10px] text-zinc-500">Base: ${formatDuration(item.baseDurationMinutes)}</span>
+                    </div>
+                </td>
+                <td class="py-3 px-4 text-right">
+                    <button onclick="showForgeBreakdown('${item.id}')" class="px-3 py-1.5 text-xs rounded bg-amber-500/10 text-amber-300 border border-amber-500/30 hover:bg-amber-500 hover:text-zinc-950 transition-all font-semibold">
+                        Breakdown
+                    </button>
+                </td>
+            </tr>
+        `;
+    });
+
+    container.innerHTML = `
+        <div class="p-4 mb-4 bg-gradient-to-r from-amber-950/30 via-zinc-900 to-zinc-950 border border-amber-500/30 rounded-lg flex flex-wrap items-center justify-between gap-4">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold">
+                    <i data-lucide="anvil" class="w-5 h-5"></i>
+                </div>
+                <div>
+                    <h3 class="text-sm font-bold text-amber-300 flex items-center gap-2">
+                        <span>The Forge Flipping Engine (Auction House + Bazaar Live Data)</span>
+                    </h3>
+                    <p class="text-xs text-zinc-400">Calculates exact ingredient costs across Bazaar & AH lowest BIN, then compares against final market sell prices per hour of forge time.</p>
+                </div>
+            </div>
+
+            <!-- Quick Forge Level Slider -->
+            <div class="flex items-center gap-3 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs">
+                <span class="text-zinc-400 font-medium">Quick Forge Perk:</span>
+                <input type="range" id="quick-forge-slider" min="0" max="20" value="${STATE.quickForgeLevel}" 
+                       class="w-24 accent-amber-500 cursor-pointer" oninput="updateQuickForgePerk(this.value)">
+                <span id="quick-forge-label" class="font-mono font-bold text-amber-400 w-12 text-right">Lvl ${STATE.quickForgeLevel} (-${Math.round(STATE.quickForgeReduction * 100)}%)</span>
+            </div>
+        </div>
+
+        <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse">
+                <thead>
+                    <tr class="border-b border-zinc-800 text-[11px] font-semibold text-zinc-400 uppercase tracking-wider bg-zinc-900/60">
+                        <th class="py-3 px-4">Req.</th>
+                        <th class="py-3 px-4">Forge Item & Recipe</th>
+                        <th class="py-3 px-4 cursor-pointer hover:text-zinc-200" onclick="setSort('cost')">Craft Cost</th>
+                        <th class="py-3 px-4">Sell Price</th>
+                        <th class="py-3 px-4 cursor-pointer hover:text-zinc-200" onclick="setSort('profit')">Net Profit</th>
+                        <th class="py-3 px-4 cursor-pointer hover:text-zinc-200" onclick="setSort('forgeHourly')">Profit / Hour ⚡</th>
+                        <th class="py-3 px-4 cursor-pointer hover:text-zinc-200" onclick="setSort('speed')">Forge Time</th>
+                        <th class="py-3 px-4 text-right">Details</th>
+                    </tr>
+                </thead>
+                <tbody>${rowsHtml}</tbody>
+            </table>
+        </div>
+    `;
+
+    lucide.createIcons();
+}
+
+function updateQuickForgePerk(level) {
+    const lvl = parseInt(level) || 0;
+    STATE.quickForgeLevel = lvl;
+    // Each level gives 1.5% reduction up to 30% at level 20
+    STATE.quickForgeReduction = Math.min(0.30, lvl * 0.015);
+    const label = document.getElementById('quick-forge-label');
+    if (label) label.innerText = `Lvl ${lvl} (-${Math.round(STATE.quickForgeReduction * 100)}%)`;
+    processMarketData();
+}
+
+function showForgeBreakdown(recipeId) {
+    const item = STATE.forgeFlips.find(f => f.id === recipeId);
+    if (!item) return;
+
+    let inputsHtml = '';
+    item.inputs.forEach(input => {
+        inputsHtml += `
+            <div class="flex items-center justify-between p-2.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs">
+                <div>
+                    <span class="font-bold text-zinc-200">${input.count}x ${input.name}</span>
+                    <span class="text-[10px] text-zinc-500 block font-mono">ID: ${input.id} &bull; Bought from ${input.source}</span>
+                </div>
+                <div class="text-right font-mono">
+                    <span class="text-zinc-300 font-bold">${formatCoins(input.totalCost)} coins</span>
+                    <span class="text-[10px] text-zinc-500 block">@ ${formatCoins(input.unitPrice)}/ea</span>
+                </div>
+            </div>
+        `;
+    });
+
+    const container = document.getElementById('table-content');
+    container.innerHTML = `
+        <div class="max-w-3xl mx-auto p-6 bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl space-y-6">
+            <div class="flex items-center justify-between border-b border-zinc-800 pb-4">
+                <div>
+                    <div class="flex items-center gap-2">
+                        <h2 class="text-xl font-bold text-zinc-100">${item.name}</h2>
+                        <span class="px-2 py-0.5 rounded text-xs font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">HOTM ${item.hotm}</span>
+                        <span class="px-2 py-0.5 rounded text-xs bg-zinc-800 text-zinc-400">${item.category}</span>
+                    </div>
+                    <p class="text-xs text-zinc-400 mt-1">Full Forge Cost & Live Profit Breakdown</p>
+                </div>
+                <button onclick="setTab('forge')" class="px-3 py-1.5 text-xs rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300">
+                    Back to Forge List
+                </button>
+            </div>
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div class="p-3 bg-zinc-950 border border-zinc-800 rounded-lg">
+                    <span class="text-[11px] text-zinc-400">Total Materials Cost</span>
+                    <p class="text-base font-mono font-bold text-zinc-200 mt-1">${formatCoins(item.totalCost)}</p>
+                </div>
+                <div class="p-3 bg-zinc-950 border border-zinc-800 rounded-lg">
+                    <span class="text-[11px] text-zinc-400">Gross Market Sell Price</span>
+                    <p class="text-base font-mono font-bold text-zinc-200 mt-1">${formatCoins(item.grossSellPrice)}</p>
+                </div>
+                <div class="p-3 bg-zinc-950 border border-zinc-800 rounded-lg">
+                    <span class="text-[11px] text-zinc-400">Net Profit per Forge</span>
+                    <p class="text-base font-mono font-bold text-emerald-400 mt-1">+${formatCoins(item.netProfit)}</p>
+                </div>
+                <div class="p-3 bg-zinc-950 border border-zinc-800 rounded-lg">
+                    <span class="text-[11px] text-zinc-400">Profit / Hour</span>
+                    <p class="text-base font-mono font-bold text-amber-300 mt-1">+${formatCoins(item.profitPerHour)}/hr</p>
+                </div>
+            </div>
+
+            <div>
+                <h4 class="text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2">Required Materials (Live Market Costs):</h4>
+                <div class="space-y-2">
+                    ${inputsHtml}
+                </div>
+            </div>
+
+            <div class="p-4 bg-zinc-950 border border-zinc-800 rounded-lg flex flex-wrap items-center justify-between gap-4 text-xs font-mono">
+                <div>
+                    <span class="text-zinc-500 block">Craft Time with Quick Forge Lvl ${STATE.quickForgeLevel}:</span>
+                    <span class="text-zinc-200 font-bold text-sm">${formatDuration(item.adjustedDurationMinutes)}</span>
+                </div>
+                <div>
+                    <span class="text-zinc-500 block">1 Slot Daily Profit (24h):</span>
+                    <span class="text-emerald-400 font-bold text-sm">+${formatCoins(item.profitPerDaySlot)} coins</span>
+                </div>
+                <div>
+                    <span class="text-zinc-500 block">5 Slots Daily Potential:</span>
+                    <span class="text-amber-300 font-bold text-sm">+${formatCoins(item.fiveSlotsDailyPotential)} coins</span>
+                </div>
+            </div>
+
+            <div class="flex items-center justify-between pt-2">
+                <button onclick="copyToClipboard('/bz ${item.name}')" class="px-3 py-1.5 rounded bg-zinc-800 hover:bg-zinc-700 text-xs text-zinc-300">
+                    Copy "/bz ${item.name}"
+                </button>
+                <button onclick="setTab('forge')" class="px-4 py-2 rounded bg-amber-500 text-zinc-950 font-bold text-xs hover:bg-amber-400">
+                    Done
+                </button>
+            </div>
+        </div>
+    `;
+
+    lucide.createIcons();
+}
+
+// Render Main Bazaar Spread Table
+function renderBazaarTable() {
+    const container = document.getElementById('table-content');
+    let list = [...STATE.items];
+
+    if (STATE.category !== 'ALL') {
+        list = list.filter(item => item.category === STATE.category);
+    }
+    if (STATE.searchQuery.trim()) {
+        const q = STATE.searchQuery.toLowerCase();
+        list = list.filter(item => item.name.toLowerCase().includes(q) || item.id.toLowerCase().includes(q));
+    }
     if (STATE.safeFlipsOnly) {
         list = list.filter(item => !item.isManipulated && item.weeklyVolume >= 50000);
     }
-
-    // Filter by budget
     if (isFinite(STATE.budget) && STATE.budget > 0) {
         list = list.filter(item => item.buyPrice <= STATE.budget);
     }
-
-    // Filter by minimum profit
     if (STATE.minProfit > 0) {
         list = list.filter(item => item.profit >= STATE.minProfit);
     }
-
-    // Filter by minimum ROI
     if (STATE.minRoi > 0) {
         list = list.filter(item => item.roi >= STATE.minRoi);
     }
-
-    // Filter by minimum weekly volume
     if (STATE.minVolume > 0) {
         list = list.filter(item => item.weeklyVolume >= STATE.minVolume);
     }
 
-    // Sort
     list.sort((a, b) => {
         let diff = 0;
         if (STATE.sortBy === 'score') diff = a.score - b.score;
@@ -554,7 +960,7 @@ function renderBazaarTable() {
     lucide.createIcons();
 }
 
-// Render NPC Sell Flips (Guaranteed Risk-Free Profit)
+// Render NPC Sell Flips
 function renderNpcTable() {
     const container = document.getElementById('table-content');
     const list = [...STATE.npcFlips].sort((a,b) => b.profit - a.profit);
@@ -564,7 +970,7 @@ function renderNpcTable() {
             <div class="py-16 text-center text-zinc-400">
                 <i data-lucide="check-circle-2" class="w-12 h-12 mx-auto mb-3 text-emerald-500"></i>
                 <p class="text-lg font-medium text-zinc-300">No active NPC flips right now</p>
-                <p class="text-sm">NPC flips occur when instant-buy prices dip below NPC shop payout. Check back shortly!</p>
+                <p class="text-sm">NPC flips occur when instant-buy prices dip below NPC shop payout.</p>
             </div>
         `;
         lucide.createIcons();
@@ -597,7 +1003,7 @@ function renderNpcTable() {
                 <i data-lucide="shield-check" class="w-6 h-6 text-emerald-400"></i>
                 <div>
                     <h3 class="text-sm font-bold text-emerald-300">100% Risk-Free NPC Flips</h3>
-                    <p class="text-xs text-zinc-400">Instant-buy these items directly on Bazaar, then sell them to any NPC vendor (Lumberjack, Mine Merchant, etc.) for instant guaranteed coins!</p>
+                    <p class="text-xs text-zinc-400">Instant-buy these items directly on Bazaar, then sell them to any NPC vendor for instant guaranteed coins!</p>
                 </div>
             </div>
         </div>
@@ -678,7 +1084,7 @@ function renderCraftTable() {
     lucide.createIcons();
 }
 
-// Open Simulator Modal/Tab
+// Open Simulator
 function openSimulator(itemId) {
     const item = STATE.items.find(i => i.id === itemId);
     if (!item) return;
@@ -733,7 +1139,6 @@ function renderSimulator() {
                 </div>
             </div>
 
-            <!-- Throughput details -->
             <div class="p-4 bg-zinc-950/80 border border-zinc-800 rounded-lg mb-6 flex flex-wrap items-center justify-between gap-4 text-xs">
                 <div>
                     <span class="text-zinc-500 block">Weekly Volume</span>
@@ -840,6 +1245,13 @@ function setTab(tab) {
             btn.classList.add('text-zinc-400', 'border-transparent');
         }
     });
+
+    // Toggle category vs forge sub-navs
+    const bazaarCats = document.getElementById('bazaar-categories');
+    const forgeCats = document.getElementById('forge-categories');
+    if (bazaarCats) bazaarCats.style.display = tab === 'bazaar' ? 'flex' : 'none';
+    if (forgeCats) forgeCats.style.display = tab === 'forge' ? 'flex' : 'none';
+
     render();
 }
 
@@ -851,6 +1263,20 @@ function setCategory(cat) {
             btn.classList.remove('text-zinc-400', 'border-transparent');
         } else {
             btn.classList.remove('bg-zinc-800', 'text-emerald-400', 'border-emerald-500/50');
+            btn.classList.add('text-zinc-400', 'border-transparent');
+        }
+    });
+    render();
+}
+
+function setForgeCategory(cat) {
+    STATE.forgeCategory = cat;
+    document.querySelectorAll('.forge-cat-pill').forEach(btn => {
+        if (btn.dataset.forgecat === cat) {
+            btn.classList.add('bg-zinc-800', 'text-amber-400', 'border-amber-500/50');
+            btn.classList.remove('text-zinc-400', 'border-transparent');
+        } else {
+            btn.classList.remove('bg-zinc-800', 'text-amber-400', 'border-amber-500/50');
             btn.classList.add('text-zinc-400', 'border-transparent');
         }
     });
@@ -902,6 +1328,54 @@ function startAutoRefresh() {
     }, 1000);
 }
 
+// Fallback Auction House Lowest BIN prices for Forge items
+function generateDemoLowestBinData() {
+    return {
+        "DIVAN_HELMET": 29500000,
+        "DIVAN_CHESTPLATE": 52000000,
+        "DIVAN_LEGGINGS": 44000000,
+        "DIVAN_BOOTS": 26000000,
+        "GEMSTONE_CHAMBER": 7200000,
+        "DRILL_ENGINE": 4800000,
+        "RUBY_POLISHED_DRILL_ENGINE": 16500000,
+        "SAPPHIRE_POLISHED_DRILL_ENGINE": 52000000,
+        "AMBER_POLISHED_DRILL_ENGINE": 54000000,
+        "MITHRIL_FUEL_TANK": 2200000,
+        "TITANIUM_FUEL_TANK": 6800000,
+        "GEMSTONE_FUEL_TANK": 14500000,
+        "PERFECTLY_CUT_FUEL_TANK": 48000000,
+        "MITHRIL_DRILL_1": 3100000,
+        "TITANIUM_DRILL_1": 38000000,
+        "RUBY_DRILL_1": 9200000,
+        "GEMSTONE_DRILL_1": 21000000,
+        "TUNGSTEN_KEY": 280000,
+        "UMBER_KEY": 290000,
+        "SKELETON_KEY": 4200000,
+        "POWER_CRYSTAL": 240000,
+        "BEJEWELED_COLLAR": 480000,
+        "BLUE_CHEESE_GOBLIN_OMELETTE": 22000000,
+        "SUNNY_SIDE_GOBLIN_OMELETTE": 4500000,
+        "SPICY_GOBLIN_OMELETTE": 4200000,
+        "DIVAN_FRAGMENT": 2800000,
+        "WORM_MEMBRANE": 22000,
+        "TREASURITE": 45000,
+        "GLACITE_JEWEL": 55000,
+        "SLUDGE_JUICE": 1850,
+        "BLUE_EGG": 16000000,
+        "GOBLIN_OMELETTE": 1500000,
+        "YELLOW_GOBLIN_EGG": 25000,
+        "RED_GOBLIN_EGG": 24000,
+        "FLAWLESS_RUBY_GEM": 2800000,
+        "FLAWLESS_SAPPHIRE_GEM": 2900000,
+        "FLAWLESS_AMBER_GEM": 2850000,
+        "FLAWLESS_JADE_GEM": 2750000,
+        "FLAWLESS_AMETHYST_GEM": 2800000,
+        "FLAWLESS_TOPAZ_GEM": 3100000,
+        "FLAWLESS_JASPER_GEM": 4200000,
+        "FLAWLESS_OPAL_GEM": 3400000
+    };
+}
+
 // Fallback market snapshot
 function generateDemoMarketData() {
     return {
@@ -924,6 +1398,86 @@ function generateDemoMarketData() {
                 product_id: "ENCHANTED_GOLD_BLOCK",
                 quick_status: { buyPrice: 135000, sellPrice: 112000, buyMovingWeek: 720000, sellMovingWeek: 810000, buyOrders: 40, sellOrders: 35 }
             },
+            "ENCHANTED_IRON_BLOCK": {
+                product_id: "ENCHANTED_IRON_BLOCK",
+                quick_status: { buyPrice: 98000, sellPrice: 84000, buyMovingWeek: 650000, sellMovingWeek: 710000, buyOrders: 35, sellOrders: 30 }
+            },
+            "ENCHANTED_REDSTONE_BLOCK": {
+                product_id: "ENCHANTED_REDSTONE_BLOCK",
+                quick_status: { buyPrice: 42000, sellPrice: 35000, buyMovingWeek: 900000, sellMovingWeek: 950000, buyOrders: 50, sellOrders: 45 }
+            },
+            "ENCHANTED_MITHRIL": {
+                product_id: "ENCHANTED_MITHRIL",
+                quick_status: { buyPrice: 1200, sellPrice: 980, buyMovingWeek: 5500000, sellMovingWeek: 5800000, buyOrders: 110, sellOrders: 95 }
+            },
+            "REFINED_MITHRIL": {
+                product_id: "REFINED_MITHRIL",
+                quick_status: { buyPrice: 195000, sellPrice: 165000, buyMovingWeek: 950000, sellMovingWeek: 1050000, buyOrders: 65, sellOrders: 55 }
+            },
+            "ENCHANTED_TITANIUM": {
+                product_id: "ENCHANTED_TITANIUM",
+                quick_status: { buyPrice: 22000, sellPrice: 18500, buyMovingWeek: 1200000, sellMovingWeek: 1300000, buyOrders: 70, sellOrders: 60 }
+            },
+            "REFINED_TITANIUM": {
+                product_id: "REFINED_TITANIUM",
+                quick_status: { buyPrice: 420000, sellPrice: 345000, buyMovingWeek: 600000, sellMovingWeek: 640000, buyOrders: 48, sellOrders: 41 }
+            },
+            "GOLDEN_PLATE": {
+                product_id: "GOLDEN_PLATE",
+                quick_status: { buyPrice: 680000, sellPrice: 560000, buyMovingWeek: 420000, sellMovingWeek: 450000, buyOrders: 40, sellOrders: 35 }
+            },
+            "MITHRIL_PLATE": {
+                product_id: "MITHRIL_PLATE",
+                quick_status: { buyPrice: 2450000, sellPrice: 2050000, buyMovingWeek: 280000, sellMovingWeek: 310000, buyOrders: 35, sellOrders: 30 }
+            },
+            "GEMSTONE_MIXTURE": {
+                product_id: "GEMSTONE_MIXTURE",
+                quick_status: { buyPrice: 1450000, sellPrice: 1180000, buyMovingWeek: 520000, sellMovingWeek: 560000, buyOrders: 55, sellOrders: 48 }
+            },
+            "GLACITE_JEWEL": {
+                product_id: "GLACITE_JEWEL",
+                quick_status: { buyPrice: 58000, sellPrice: 48000, buyMovingWeek: 1800000, sellMovingWeek: 1900000, buyOrders: 85, sellOrders: 75 }
+            },
+            "SLUDGE_JUICE": {
+                product_id: "SLUDGE_JUICE",
+                quick_status: { buyPrice: 1950, sellPrice: 1650, buyMovingWeek: 12500000, sellMovingWeek: 13000000, buyOrders: 150, sellOrders: 130 }
+            },
+            "FINE_RUBY_GEM": {
+                product_id: "FINE_RUBY_GEM",
+                quick_status: { buyPrice: 34000, sellPrice: 28000, buyMovingWeek: 3200000, sellMovingWeek: 3400000, buyOrders: 90, sellOrders: 80 }
+            },
+            "FINE_AMBER_GEM": {
+                product_id: "FINE_AMBER_GEM",
+                quick_status: { buyPrice: 32000, sellPrice: 27000, buyMovingWeek: 2800000, sellMovingWeek: 3000000, buyOrders: 85, sellOrders: 75 }
+            },
+            "FINE_AMETHYST_GEM": {
+                product_id: "FINE_AMETHYST_GEM",
+                quick_status: { buyPrice: 31000, sellPrice: 26000, buyMovingWeek: 2700000, sellMovingWeek: 2900000, buyOrders: 80, sellOrders: 70 }
+            },
+            "FINE_JADE_GEM": {
+                product_id: "FINE_JADE_GEM",
+                quick_status: { buyPrice: 33000, sellPrice: 27500, buyMovingWeek: 2900000, sellMovingWeek: 3100000, buyOrders: 85, sellOrders: 75 }
+            },
+            "FINE_SAPPHIRE_GEM": {
+                product_id: "FINE_SAPPHIRE_GEM",
+                quick_status: { buyPrice: 32500, sellPrice: 27000, buyMovingWeek: 2850000, sellMovingWeek: 3050000, buyOrders: 82, sellOrders: 72 }
+            },
+            "FLAWLESS_RUBY_GEM": {
+                product_id: "FLAWLESS_RUBY_GEM",
+                quick_status: { buyPrice: 2850000, sellPrice: 2450000, buyMovingWeek: 450000, sellMovingWeek: 480000, buyOrders: 45, sellOrders: 40 }
+            },
+            "FLAWLESS_SAPPHIRE_GEM": {
+                product_id: "FLAWLESS_SAPPHIRE_GEM",
+                quick_status: { buyPrice: 2950000, sellPrice: 2550000, buyMovingWeek: 420000, sellMovingWeek: 450000, buyOrders: 42, sellOrders: 38 }
+            },
+            "FLAWLESS_AMBER_GEM": {
+                product_id: "FLAWLESS_AMBER_GEM",
+                quick_status: { buyPrice: 2900000, sellPrice: 2500000, buyMovingWeek: 430000, sellMovingWeek: 460000, buyOrders: 43, sellOrders: 39 }
+            },
+            "PERFECT_RUBY_GEM": {
+                product_id: "PERFECT_RUBY_GEM",
+                quick_status: { buyPrice: 17500000, sellPrice: 15200000, buyMovingWeek: 120000, sellMovingWeek: 130000, buyOrders: 30, sellOrders: 25 }
+            },
             "HOT_POTATO_BOOK": {
                 product_id: "HOT_POTATO_BOOK",
                 quick_status: { buyPrice: 62000, sellPrice: 51000, buyMovingWeek: 1900000, sellMovingWeek: 2100000, buyOrders: 110, sellOrders: 90 }
@@ -931,22 +1485,6 @@ function generateDemoMarketData() {
             "FUMING_POTATO_BOOK": {
                 product_id: "FUMING_POTATO_BOOK",
                 quick_status: { buyPrice: 890000, sellPrice: 775000, buyMovingWeek: 450000, sellMovingWeek: 480000, buyOrders: 35, sellOrders: 28 }
-            },
-            "REFINED_MITHRIL": {
-                product_id: "REFINED_MITHRIL",
-                quick_status: { buyPrice: 185000, sellPrice: 154000, buyMovingWeek: 950000, sellMovingWeek: 1050000, buyOrders: 65, sellOrders: 55 }
-            },
-            "REFINED_TITANIUM": {
-                product_id: "REFINED_TITANIUM",
-                quick_status: { buyPrice: 380000, sellPrice: 325000, buyMovingWeek: 600000, sellMovingWeek: 640000, buyOrders: 48, sellOrders: 41 }
-            },
-            "ENCHANTED_PACKED_ICE": {
-                product_id: "ENCHANTED_PACKED_ICE",
-                quick_status: { buyPrice: 142000, sellPrice: 122000, buyMovingWeek: 620000, sellMovingWeek: 580000, buyOrders: 38, sellOrders: 30 }
-            },
-            "STOCK_OF_STONKS": {
-                product_id: "STOCK_OF_STONKS",
-                quick_status: { buyPrice: 28500000, sellPrice: 26200000, buyMovingWeek: 180000, sellMovingWeek: 175000, buyOrders: 45, sellOrders: 40 }
             },
             "ENCHANTED_CARROT": {
                 product_id: "ENCHANTED_CARROT",
@@ -962,7 +1500,6 @@ function generateDemoMarketData() {
 
 // Initial Setup
 document.addEventListener('DOMContentLoaded', () => {
-    // Search listener
     const searchInput = document.getElementById('search-input');
     if (searchInput) {
         searchInput.addEventListener('input', (e) => {
@@ -971,7 +1508,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Safe Flips Toggle
     const safeToggle = document.getElementById('toggle-safe-flips');
     if (safeToggle) {
         safeToggle.addEventListener('change', (e) => {
@@ -980,7 +1516,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Budget listener
     const budgetInput = document.getElementById('filter-budget');
     if (budgetInput) {
         budgetInput.addEventListener('input', (e) => {
@@ -990,7 +1525,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Min profit listener
     const minProfitInput = document.getElementById('filter-min-profit');
     if (minProfitInput) {
         minProfitInput.addEventListener('input', (e) => {
@@ -1000,7 +1534,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Min volume listener
     const minVolInput = document.getElementById('filter-min-volume');
     if (minVolInput) {
         minVolInput.addEventListener('change', (e) => {
@@ -1009,7 +1542,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Tax rate selector
     const taxSelect = document.getElementById('tax-select');
     if (taxSelect) {
         taxSelect.addEventListener('change', (e) => {

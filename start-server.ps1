@@ -24,7 +24,7 @@ try {
 
         $path = $request.Url.LocalPath
 
-        # Route 1: Local Direct Hypixel API Bridge (bypasses browser CORS completely)
+        # Route 1: Local Direct Hypixel Bazaar API Bridge
         if ($path -eq "/api/bazaar") {
             try {
                 $bazaarUrl = "https://api.hypixel.net/v2/skyblock/bazaar"
@@ -36,6 +36,24 @@ try {
                 $response.OutputStream.Write($buffer, 0, $buffer.Length)
             } catch {
                 $err = '{"success":false,"cause":"Failed to fetch Hypixel API"}'
+                $buffer = [System.Text.Encoding]::UTF8.GetBytes($err)
+                $response.StatusCode = 500
+                $response.ContentType = "application/json"
+                $response.OutputStream.Write($buffer, 0, $buffer.Length)
+            }
+        }
+        # Route 2: Local Direct Lowest BIN API Bridge (Auction House)
+        elseif ($path -eq "/api/lowestbin") {
+            try {
+                $binUrl = "https://moulberry.codes/lowestbin.json"
+                $webClient = New-Object System.Net.WebClient
+                $json = $webClient.DownloadString($binUrl)
+                $buffer = [System.Text.Encoding]::UTF8.GetBytes($json)
+                $response.ContentType = "application/json"
+                $response.AddHeader("Access-Control-Allow-Origin", "*")
+                $response.OutputStream.Write($buffer, 0, $buffer.Length)
+            } catch {
+                $err = '{}'
                 $buffer = [System.Text.Encoding]::UTF8.GetBytes($err)
                 $response.StatusCode = 500
                 $response.ContentType = "application/json"

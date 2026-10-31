@@ -1,46 +1,40 @@
-# SkyFlip - Hypixel SkyBlock Flipping Intelligence 💰
+# SkyFlip - Hypixel SkyBlock Flipping & Forge Intelligence 💰🔥
 
-An instant, live market tracking and flipping intelligence web application for **Hypixel SkyBlock**. 
-It calculates real-time profit margins, ROI %, and trade velocities across the entire Bazaar without requiring any private API keys.
+A real-time market tracker and flipping engine for **Hypixel SkyBlock**. 
+It combines live **Bazaar prices** with live **Auction House Lowest BIN (LBIN)** data to find the most profitable flips and passive **Forge** recipes in the game.
 
 ---
 
 ## 🚀 How to Run
 
-You have two simple ways to run this:
-
 ### Option 1: Direct in Browser (Instant)
-1. Double-click **`index.html`** in this folder to open it in your web browser (Chrome, Opera GX, Edge, Firefox).
-2. The app uses public multi-redundancy CORS proxies to fetch live Hypixel Bazaar data.
+Double-click **`index.html`** in this folder to open it in any web browser (Chrome, Opera GX, Edge, Firefox).
 
 ### Option 2: High-Speed Local Bridge (Recommended)
-If you want ultra-fast updates without any public proxy latency or rate limits:
 1. Right-click **`start-server.ps1`** and choose **"Run with PowerShell"**.
-2. It will automatically start a lightweight local server and open `http://localhost:8080/` in your browser.
-3. *Note: No Node.js or Python is required! This uses Windows built-in PowerShell .NET capabilities.*
+2. It starts a lightweight local bridge that streams live Hypixel Bazaar & Auction House data with zero latency or rate-limiting.
+3. Automatically opens `http://localhost:8080/`.
 
 ---
 
-## 🎯 Flip Categories Included
+## 🛠️ Features Included
 
-### 1. Bazaar Order Flipping (Spread Arbitrage)
-* **How it works:** 
-  * You place a **Buy Order** at the highest existing buy order price.
-  * Once filled, you place a **Sell Offer** at the lowest existing sell offer price.
-  * The app calculates your exact profit after deducting the SkyBlock Bazaar sales tax (1.125% - 1.25%).
-* **Tips:** Pay attention to the **Speed / Volume** indicator. Items with > 1M weekly volume (like Enchanted Slime, Enchanted Diamonds, Booster Cookies) fill almost immediately.
+### 1. 🔥 The Forge Flipping Engine (Auction House + Bazaar Fusion)
+* **What it does:** Scans every recipe in The Dwarven Mines Forge (Refined Materials, Divan's Armor, Drill Engines, Mining Drills, Perfect Gemstones, Keys, Omelettes).
+* **Live Cost & Sell Calculations:**
+  * Pulls raw ingredient costs from the Bazaar (Buy Order or Instant Buy).
+  * Pulls finished item sell values from either Bazaar Sell Offers or **Auction House Lowest BIN (LBIN)**.
+* **Profit / Hour:** Ranks recipes by actual profit generated per hour of real-world forge time.
+* **5-Slot Daily Potential:** Shows how many millions you can generate passively every 24 hours running 5 forge slots.
+* **Quick Forge Perk Slider:** Adjust your HOTM Quick Forge perk level (0 to 20) to see exact reduced craft times and increased hourly profits!
 
-### 2. Instant NPC Flips (100% Risk-Free)
-* **How it works:**
-  * When players dump large quantities of items on the Bazaar, instant-buy prices can temporarily drop *below* the fixed payout that NPC shopkeepers (Lumberjack, Mine Merchant, Farm Merchant) pay.
-  * You simply Instant-Buy the items on the Bazaar and sell them directly to an NPC shop for free guaranteed profit.
+### 2. ⚡ Realistic Bazaar Spread Arbitrage
+* Calculates true round-trip market flow using weekly moving buy and sell volumes.
+* Undercut and competition-aware: calculates **Realistic Coins / Hr** based on real player market share.
+* Anti-Manipulation Trap Shield (⚠️ **TRAP**) flags fake orders of 1 item with manipulated spreads.
 
-### 3. Craft Flips
-* **How it works:**
-  * Compares the cost of buying raw materials (e.g. 160 Enchanted Diamonds) against the market sell offer of the crafted item (Enchanted Diamond Block, Super Compactor 3000, Hot Potato Books).
-  * Automatically factors in Bazaar tax to tell you whether crafting the item yourself is worth the time.
+### 3. 🛡️ 100% Risk-Free NPC Vendor Arbitrage
+* Alerts whenever an item's instant-buy price on the Bazaar drops below what NPC shopkeepers pay, giving you instant risk-free coins.
 
-### 4. Interactive Profit Simulator
-* Test any item with custom quantities (1 stack, 160, 1024, or full inventory).
-* View exact investment needed, gross revenue, tax paid, and clean net profit.
-* Copy the `/bz <item>` command to your clipboard with one click.
+### 4. 🔨 Craft Flips & Profit Simulator
+* Test custom quantities, calculate net profit after taxes, and copy in-game `/bz <item>` commands with a single click.
