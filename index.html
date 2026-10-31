@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SkyFlip - Hypixel SkyBlock Realistic Flipping Engine</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0c0d12;
+            color: #f3f4f6;
+        }
+        .font-mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #12141c;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #272a38;
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #10b981;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col bg-[#0b0c10] text-zinc-100 antialiased selection:bg-emerald-500 selection:text-black">
+
+    <!-- Top Navigation Bar -->
+    <header class="border-b border-zinc-800/80 bg-[#0e1017]/90 backdrop-blur-md sticky top-0 z-40">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-600 via-teal-500 to-cyan-400 flex items-center justify-center shadow-lg shadow-emerald-500/25">
+                    <i data-lucide="coins" class="w-5 h-5 text-zinc-950 font-bold"></i>
+                </div>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-lg font-extrabold tracking-tight bg-gradient-to-r from-emerald-400 via-teal-300 to-cyan-400 bg-clip-text text-transparent">SkyFlip</span>
+                        <span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-medium">Realistic Profit Model</span>
+                    </div>
+                    <p class="text-[11px] text-zinc-400">Hypixel SkyBlock Live Market & Velocity Tracker</p>
+                </div>
+            </div>
+
+            <!-- Real-time Status & Quick Actions -->
+            <div class="flex items-center gap-3">
+                <div class="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-800">
+                    <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                    <span id="connection-status" class="text-xs text-zinc-400">Connecting to public API...</span>
+                </div>
+
+                <div class="flex items-center gap-2">
+                    <button onclick="fetchBazaarData()" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-semibold transition-all">
+                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+                        <span>Refresh</span>
+                        <span id="refresh-timer" class="text-[10px] opacity-75 font-mono ml-0.5">30s</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-1 w-full space-y-6">
+
+        <!-- Top Stat Cards -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div class="p-4 rounded-xl bg-gradient-to-b from-[#141724] to-[#10121d] border border-zinc-800/80 shadow-md">
+                <div class="flex items-center justify-between text-zinc-400">
+                    <span class="text-xs font-medium">Bazaar Active Items</span>
+                    <i data-lucide="layers" class="w-4 h-4 text-emerald-400"></i>
+                </div>
+                <div id="stat-total-flips" class="text-2xl font-extrabold text-zinc-100 font-mono mt-2">...</div>
+                <p class="text-[11px] text-zinc-500 mt-1">Full Bazaar scanned</p>
+            </div>
+
+            <div class="p-4 rounded-xl bg-gradient-to-b from-[#141724] to-[#10121d] border border-emerald-500/20 shadow-md">
+                <div class="flex items-center justify-between text-emerald-400">
+                    <span class="text-xs font-bold">Top Realistic Hourly Profit</span>
+                    <i data-lucide="zap" class="w-4 h-4 text-emerald-400"></i>
+                </div>
+                <div id="stat-top-hourly" class="text-2xl font-extrabold text-emerald-300 font-mono mt-2">...</div>
+                <p id="stat-top-hourly-item" class="text-[11px] text-zinc-400 truncate mt-1">Factoring fill velocity</p>
+            </div>
+
+            <div class="p-4 rounded-xl bg-gradient-to-b from-[#141724] to-[#10121d] border border-zinc-800/80 shadow-md">
+                <div class="flex items-center justify-between text-zinc-400">
+                    <span class="text-xs font-medium">Best Liquid ROI %</span>
+                    <i data-lucide="percent" class="w-4 h-4 text-amber-400"></i>
+                </div>
+                <div id="stat-top-roi" class="text-2xl font-extrabold text-amber-300 font-mono mt-2">...</div>
+                <p class="text-[11px] text-zinc-500 mt-1">High trade volume items</p>
+            </div>
+
+            <div class="p-4 rounded-xl bg-gradient-to-b from-[#141724] to-[#10121d] border border-zinc-800/80 shadow-md">
+                <div class="flex items-center justify-between text-zinc-400">
+                    <span class="text-xs font-medium">0% Risk NPC Arbitrage</span>
+                    <i data-lucide="shield-check" class="w-4 h-4 text-cyan-400"></i>
+                </div>
+                <div id="stat-npc-flips" class="text-2xl font-extrabold text-cyan-300 font-mono mt-2">...</div>
+                <p class="text-[11px] text-zinc-500 mt-1">Instant buy &rarr; NPC sell</p>
+            </div>
+        </div>
+
+        <!-- Mode & Category Selectors -->
+        <div class="space-y-3">
+            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800 pb-3">
+                <div class="flex flex-wrap items-center gap-2">
+                    <button data-tab="bazaar" onclick="setTab('bazaar')" class="tab-btn px-4 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 border bg-emerald-500/20 text-emerald-400 border-emerald-500/50 transition-all">
+                        <i data-lucide="arrow-left-right" class="w-4 h-4"></i>
+                        <span>Bazaar Spread Flips</span>
+                    </button>
+                    <button data-tab="npc" onclick="setTab('npc')" class="tab-btn px-4 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 border border-transparent text-zinc-400 hover:text-zinc-200 transition-all">
+                        <i data-lucide="store" class="w-4 h-4"></i>
+                        <span>Instant NPC Flips (0% Risk)</span>
+                    </button>
+                    <button data-tab="craft" onclick="setTab('craft')" class="tab-btn px-4 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 border border-transparent text-zinc-400 hover:text-zinc-200 transition-all">
+                        <i data-lucide="hammer" class="w-4 h-4"></i>
+                        <span>Craft Flips</span>
+                    </button>
+                    <button data-tab="simulator" onclick="setTab('simulator')" class="tab-btn px-4 py-2 rounded-lg text-xs font-semibold flex items-center gap-2 border border-transparent text-zinc-400 hover:text-zinc-200 transition-all">
+                        <i data-lucide="calculator" class="w-4 h-4"></i>
+                        <span>Profit Simulator</span>
+                    </button>
+                </div>
+
+                <!-- Tax Rate Selection -->
+                <div class="flex items-center gap-2 text-xs text-zinc-400">
+                    <span>Tax:</span>
+                    <select id="tax-select" class="bg-zinc-900 border border-zinc-800 rounded px-2.5 py-1 text-xs text-zinc-200 focus:outline-none focus:border-emerald-500">
+                        <option value="0.01125" selected>1.125% (Community Upgrade)</option>
+                        <option value="0.0125">1.25% (Standard Base)</option>
+                        <option value="0.0225">2.25% (No Upgrades)</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Category Pills -->
+            <div class="flex flex-wrap items-center gap-2 pt-1">
+                <span class="text-xs text-zinc-500 font-medium mr-1">Category:</span>
+                <button data-cat="ALL" onclick="setCategory('ALL')" class="cat-pill px-3 py-1 rounded-md text-xs font-medium border bg-zinc-800 text-emerald-400 border-emerald-500/50 transition-all">All Items</button>
+                <button data-cat="MINING" onclick="setCategory('MINING')" class="cat-pill px-3 py-1 rounded-md text-xs font-medium border border-transparent text-zinc-400 hover:text-zinc-200 transition-all">⛏️ Mining</button>
+                <button data-cat="FARMING" onclick="setCategory('FARMING')" class="cat-pill px-3 py-1 rounded-md text-xs font-medium border border-transparent text-zinc-400 hover:text-zinc-200 transition-all">🌾 Farming</button>
+                <button data-cat="COMBAT" onclick="setCategory('COMBAT')" class="cat-pill px-3 py-1 rounded-md text-xs font-medium border border-transparent text-zinc-400 hover:text-zinc-200 transition-all">⚔️ Combat & Slayers</button>
+                <button data-cat="WOODS_FISH" onclick="setCategory('WOODS_FISH')" class="cat-pill px-3 py-1 rounded-md text-xs font-medium border border-transparent text-zinc-400 hover:text-zinc-200 transition-all">🎣 Woods & Fish</button>
+                <button data-cat="ODDITIES" onclick="setCategory('ODDITIES')" class="cat-pill px-3 py-1 rounded-md text-xs font-medium border border-transparent text-zinc-400 hover:text-zinc-200 transition-all">🔮 Oddities (Cookies, Books)</button>
+            </div>
+        </div>
+
+        <!-- Filter Controls Bar -->
+        <div class="p-4 rounded-xl bg-[#12141d] border border-zinc-800/80 flex flex-wrap items-center gap-4 justify-between">
+            <div class="flex flex-1 flex-wrap items-center gap-3 min-w-[280px]">
+                <!-- Search Input -->
+                <div class="relative flex-1 min-w-[180px]">
+                    <i data-lucide="search" class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500"></i>
+                    <input type="text" id="search-input" placeholder="Search item by name..." 
+                           class="w-full pl-9 pr-4 py-2 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-100 placeholder-zinc-500 focus:outline-none focus:border-emerald-500 transition-all">
+                </div>
+
+                <!-- Safe Flips Toggle (Anti-Manipulation) -->
+                <label class="flex items-center gap-2 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs cursor-pointer hover:border-zinc-700 transition-all">
+                    <input type="checkbox" id="toggle-safe-flips" checked class="accent-emerald-500 w-3.5 h-3.5 rounded">
+                    <span class="text-zinc-300 font-medium">Safe Flips Only</span>
+                    <span class="text-[10px] text-emerald-400 bg-emerald-500/10 px-1.5 py-0.2 rounded" title="Filters out fake manipulation traps & dead items">Anti-Trap</span>
+                </label>
+
+                <!-- Budget / Purse Filter -->
+                <div class="flex items-center gap-2 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs">
+                    <span class="text-zinc-400">Purse:</span>
+                    <input type="number" id="filter-budget" placeholder="Unlimited" 
+                           class="w-24 bg-transparent text-zinc-200 font-mono focus:outline-none placeholder-zinc-600 text-xs">
+                </div>
+
+                <!-- Min Profit Filter -->
+                <div class="flex items-center gap-2 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs">
+                    <span class="text-zinc-400">Min Margin:</span>
+                    <input type="number" id="filter-min-profit" value="500" step="500"
+                           class="w-20 bg-transparent text-zinc-200 font-mono focus:outline-none text-xs">
+                </div>
+
+                <!-- Minimum Volume / Speed -->
+                <div class="flex items-center gap-2 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs">
+                    <span class="text-zinc-400">Speed / Vol:</span>
+                    <select id="filter-min-volume" class="bg-transparent text-zinc-200 focus:outline-none text-xs cursor-pointer">
+                        <option value="0">All Items</option>
+                        <option value="20000" selected>Liquid (20k+/wk)</option>
+                        <option value="100000">Fast (100k+/wk)</option>
+                        <option value="1000000">Hyper Fast (1M+/wk)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div id="match-count" class="text-xs font-mono text-zinc-400">...</div>
+        </div>
+
+        <!-- Table Card -->
+        <div class="rounded-xl bg-[#12141d] border border-zinc-800/80 overflow-hidden shadow-xl" id="table-content">
+            <div class="py-24 text-center text-zinc-400">
+                <i data-lucide="loader-2" class="w-8 h-8 animate-spin mx-auto mb-3 text-emerald-400"></i>
+                <p class="text-sm font-medium">Scanning every Bazaar item and calculating velocities...</p>
+            </div>
+        </div>
+
+        <!-- How Realistic Money Works Explanation Box -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs text-zinc-400 border-t border-zinc-800/60 pt-6">
+            <div class="p-4 rounded-xl bg-zinc-950/60 border border-zinc-800">
+                <h4 class="font-bold text-zinc-200 mb-1 flex items-center gap-1.5">
+                    <i data-lucide="zap" class="w-4 h-4 text-emerald-400"></i>
+                    What is "Realistic Coins/Hr"?
+                </h4>
+                <p>Unlike raw profit margin, this model calculates true hourly throughput by measuring weekly instant-buys and instant-sells, active order undercutting, and your realistic market share. No fake millions from dead items!</p>
+            </div>
+            <div class="p-4 rounded-xl bg-zinc-950/60 border border-zinc-800">
+                <h4 class="font-bold text-zinc-200 mb-1 flex items-center gap-1.5">
+                    <i data-lucide="shield-alert" class="w-4 h-4 text-amber-400"></i>
+                    Anti-Manipulation Protection
+                </h4>
+                <p>When market manipulators place a fake order of 1 item to inflate the apparent spread, SkyFlip compares depth and order quantity to flag traps with ⚠️ <strong>TRAP</strong> badges.</p>
+            </div>
+            <div class="p-4 rounded-xl bg-zinc-950/60 border border-zinc-800">
+                <h4 class="font-bold text-zinc-200 mb-1 flex items-center gap-1.5">
+                    <i data-lucide="clock" class="w-4 h-4 text-cyan-400"></i>
+                    Est. Fill Speed
+                </h4>
+                <p>⚡ <strong>&lt; 2 mins</strong> items (like Enchanted Slime or Diamonds) fill rapidly. 🔴 <strong>&gt; 1 hour</strong> items yield high margins per item but will tie up your order slots for a long time.</p>
+            </div>
+        </div>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="border-t border-zinc-800/60 bg-[#0e1017] py-4 text-center text-xs text-zinc-500">
+        <p>SkyFlip &bull; Powered by open public Hypixel SkyBlock API &bull; No API key required</p>
+    </footer>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="fixed bottom-6 right-6 px-4 py-2.5 rounded-lg bg-emerald-500 text-zinc-950 font-semibold text-xs shadow-2xl transition-all duration-300 opacity-0 pointer-events-none z-50 flex items-center gap-2">
+        <i data-lucide="check" class="w-4 h-4"></i>
+        <span>Copied to clipboard</span>
+    </div>
+
+    <!-- Hidden state for compatibility -->
+    <div id="stat-top-profit" class="hidden"></div>
+    <div id="stat-top-item" class="hidden"></div>
+
+    <!-- Application Scripts -->
+    <script src="items_npc_data.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
